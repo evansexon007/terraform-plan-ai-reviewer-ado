@@ -66,6 +66,12 @@ The output can be published in Azure DevOps as:
 * A downloadable pipeline artifact
 * A rendered pipeline summary
 
+## Example output
+
+A full example review report is available here:
+
+[View an example AI-generated Terraform plan review](./terraform-plan-ai-review-example.MD)
+
 ---
 
 ## Important scope clarification
