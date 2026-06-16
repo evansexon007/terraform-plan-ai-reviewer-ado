@@ -165,61 +165,177 @@ def redact_obvious_secrets(text: str) -> str:
 
 
 def build_prompt(plan_text: str) -> str:
-    return f"""
-Review the following Terraform plan output.
+    prompt_parts = [
+        "Review the following Terraform plan output.",
+        "",
+        "You are reviewing the plan in the context of an Azure DevOps pipeline for Azure cloud infrastructure.",
+        "",
+        "Focus on risk, not style.",
+        "",
+        RISK_REVIEW_SCOPE,
+        "",
+        "Return a markdown report with this exact structure:",
+        "",
+        "# Terraform Plan AI Review",
+        "",
+        "## Overall Risk",
+        "Low, Medium, High, or Critical",
+        "",
+        "## Approval Recommendation",
+        "One of:",
+        "- Safe to proceed",
+        "- Proceed with caution",
+        "- Manual review recommended",
+        "- Do not apply until reviewed",
+        "",
+        "## Summary",
+        "Short summary of the plan and the main risks.",
+        "",
+        "## Action Summary",
+        "Summarise creates, updates, deletes and replacements if visible.",
+        "",
+        "## High-Risk Findings",
+        'List high-risk findings. If none, say "None identified."',
+        "",
+        "## Medium-Risk Findings",
+        'List medium-risk findings. If none, say "None identified."',
+        "",
+        "## Low-Risk Observations",
+        'List low-risk observations. If none, say "None identified."',
+        "",
+        "## Security and Governance Notes",
+        "Mention security, compliance, monitoring, diagnostic, RBAC, identity or data protection concerns.",
+        "",
+        "## Recommended Next Steps",
+        "Clear practical steps for the engineer/reviewer.",
+        "",
+        "Rules:",
+        "- Review the full plan text, not only the highlighted risk categories.",
+        "- Do not invent resource names that are not in the plan.",
+        "- If the plan is truncated, say so.",
+        "- If there is not enough information, say so.",
+        "- Do not recommend automatic apply for risky changes.",
+        "- Use plain ASCII only.",
+        "- Keep the report concise but useful.",
+        "- Treat destructive, public exposure, identity, network, Key Vault, database, storage, backup and monitoring changes as higher-risk unless clearly benign.",
+        "",
+        "Terraform plan output:",
+        "",
+        "```text",
+        plan_text,
+        "```",
+    ]
 
-You are reviewing the plan in the context of an Azure DevOps pipeline for Azure cloud infrastructure.
+    return "\n".join(prompt_parts)
 
-Focus on risk, not style.
 
-{RISK_REVIEW_SCOPE}
+def extract_overall_risk(report: str) -> str:
+    """
+    Extract the Overall Risk value from the markdown report.
+    Expected values: Low, Medium, High, Critical.
+    """
 
-Return a markdown report with this exact structure:
+    match = re.search(
+        r"## Overall Risk\s+([A-Za-z]+)",
+        report,
+        flags=re.IGNORECASE,
+    )
 
-# Terraform Plan AI Review
+    if not match:
+        return "unknown"
 
-## Overall Risk
-Low, Medium, High, or Critical
+    return match.group(1).strip().lower()
 
-## Approval Recommendation
-One of:
-- Safe to proceed
-- Proceed with caution
-- Manual review recommended
-- Do not apply until reviewed
 
-## Summary
-Short summary of the plan and the main risks.
+def determine_exit_code(report: str, fail_on_high_risk: bool) -> int:
+    if not fail_on_high_risk:
+        return 0
 
-## Action Summary
-Summarise creates, updates, deletes and replacements if visible.
+    overall_risk = extract_overall_risk(report)
 
-## High-Risk Findings
-List high-risk findings. If none, say "None identified."
+    if overall_risk in ["high", "critical"]:
+        return 1
 
-## Medium-Risk Findings
-List medium-risk findings. If none, say "None identified."
+    return 0
 
-## Low-Risk Observations
-List low-risk observations. If none, say "None identified."
 
-## Security and Governance Notes
-Mention security, compliance, monitoring, diagnostic, RBAC, identity or data protection concerns.
+async def run_review(plan_file: Path, output_file: Path, fail_on_high_risk: bool) -> int:
+    if not os.getenv("OPENAI_API_KEY"):
+        print("ERROR: OPENAI_API_KEY environment variable is not set.", file=sys.stderr)
+        return 2
 
-## Recommended Next Steps
-Clear practical steps for the engineer/reviewer.
+    plan_text = read_plan_file(plan_file)
+    plan_text = redact_obvious_secrets(plan_text)
 
-Rules:
-- Review the full plan text, not only the highlighted risk categories.
-- Do not invent resource names that are not in the plan.
-- If the plan is truncated, say so.
-- If there is not enough information, say so.
-- Do not recommend automatic apply for risky changes.
-- Use plain ASCII only.
-- Keep the report concise but useful.
-- Treat destructive, public exposure, identity, network, Key Vault, database, storage, backup and monitoring changes as higher-risk unless clearly benign.
+    agent = Agent(
+        name="Terraform Plan Risk Reviewer",
+        instructions="""
+        You are a senior cloud platform engineer reviewing Terraform plan output.
+        You specialise in Azure, Azure DevOps, Terraform, landing zones, networking,
+        identity, governance, monitoring, security and operational risk.
 
-Terraform plan output:
+        You are read-only. You do not modify infrastructure.
+        Your job is to produce a clear markdown risk review for a human approver.
 
-```text
-{plan_text}
+        Review the complete Terraform plan provided by the user.
+        Do not limit your review to specific Azure resource types.
+        Use plain ASCII only.
+        """,
+    )
+
+    prompt = build_prompt(plan_text)
+    result = await Runner.run(agent, prompt)
+
+    report = result.final_output
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(report, encoding="utf-8")
+
+    print(report)
+
+    return determine_exit_code(report, fail_on_high_risk)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Review a Terraform plan text file and produce a markdown AI risk report."
+    )
+
+    parser.add_argument(
+        "--plan-file",
+        required=True,
+        help="Path to terraform show -no-color output, for example plan.txt",
+    )
+
+    parser.add_argument(
+        "--output",
+        required=True,
+        help="Path to write the markdown review report, for example plan-review.md",
+    )
+
+    parser.add_argument(
+        "--fail-on-high-risk",
+        action="store_true",
+        help="Exit with code 1 if the report indicates High or Critical overall risk.",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+
+    plan_file = Path(args.plan_file)
+    output_file = Path(args.output)
+
+    return asyncio.run(
+        run_review(
+            plan_file=plan_file,
+            output_file=output_file,
+            fail_on_high_risk=args.fail_on_high_risk,
+        )
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
