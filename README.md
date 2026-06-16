@@ -8,6 +8,39 @@ It is designed to support a human reviewer or approver. It is **not** intended t
 
 ---
 
+## Why I built this
+
+In real Terraform delivery workflows, plan reviews can be difficult to do properly under time pressure.
+
+A Terraform plan can easily run to hundreds or thousands of lines, especially in Azure platform environments with networking, identity, monitoring, diagnostics, private endpoints, storage, AKS, App Gateway, WAF and RBAC changes.
+
+When someone is asked to review a long plan quickly, it is easy to miss important details such as:
+
+* A resource replacement hidden in the middle of the output
+* A public access setting changing from `false` to `true`
+* An NSG rule being opened to `0.0.0.0/0`
+* A diagnostic setting being removed
+* A Key Vault, RBAC or managed identity change
+* A storage account, disk or database deletion
+* A route table, private endpoint or DNS change with connectivity impact
+* A SKU, scale or capacity change with cost or performance impact
+
+I built this project to act as a second pair of eyes during the review process.
+
+The goal is not to let AI approve infrastructure changes automatically. The goal is to produce a quick, readable risk summary that helps the human reviewer focus on the parts of the plan that matter most.
+
+It is especially useful when:
+
+* The plan output is long
+* The reviewer is under time pressure
+* Multiple teams are submitting changes
+* The change spans several Azure services
+* The risk is not obvious from the Terraform output alone
+
+The reviewer remains human. The AI report is there to support faster, safer and more consistent review.
+
+---
+
 ## What it does
 
 The tool reads a Terraform plan text file, reviews the visible resource changes, and produces a markdown report such as:
@@ -18,20 +51,20 @@ plan-review.md
 
 The report includes:
 
-- Overall risk rating
-- Approval recommendation
-- Summary of the planned change
-- Action summary
-- High-risk findings
-- Medium-risk findings
-- Low-risk observations
-- Security and governance notes
-- Recommended next steps
+* Overall risk rating
+* Approval recommendation
+* Summary of the planned change
+* Action summary
+* High-risk findings
+* Medium-risk findings
+* Low-risk observations
+* Security and governance notes
+* Recommended next steps
 
 The output can be published in Azure DevOps as:
 
-- A downloadable pipeline artifact
-- A rendered pipeline summary
+* A downloadable pipeline artifact
+* A rendered pipeline summary
 
 ---
 
@@ -49,19 +82,19 @@ It should still assess all visible Terraform changes in the plan, including reso
 
 The reviewer gives additional focus to:
 
-- Resource deletion
-- Resource replacement
-- Force replacement
-- Public exposure changes
-- NSG, firewall, route, DNS, private endpoint and private DNS changes
-- RBAC and managed identity changes
-- Key Vault changes
-- Storage account and database risks
-- Backup, retention and data protection changes
-- Diagnostic, logging and monitoring removal
-- AKS, App Gateway and WAF changes
-- SKU, scale, capacity and cost-impacting changes
-- Policy, lock, tag and governance changes
+* Resource deletion
+* Resource replacement
+* Force replacement
+* Public exposure changes
+* NSG, firewall, route, DNS, private endpoint and private DNS changes
+* RBAC and managed identity changes
+* Key Vault changes
+* Storage account and database risks
+* Backup, retention and data protection changes
+* Diagnostic, logging and monitoring removal
+* AKS, App Gateway and WAF changes
+* SKU, scale, capacity and cost-impacting changes
+* Policy, lock, tag and governance changes
 
 ---
 
@@ -71,18 +104,18 @@ The reviewer is read-only.
 
 It does:
 
-- Read `plan.txt`
-- Send the plan content to the OpenAI model for analysis
-- Write `plan-review.md`
+* Read `plan.txt`
+* Send the plan content to the OpenAI model for analysis
+* Write `plan-review.md`
 
 It does **not**:
 
-- Run `terraform apply`
-- Modify Azure
-- Modify Terraform code
-- Modify Terraform state
-- Create, update or delete infrastructure
-- Call Azure APIs directly
+* Run `terraform apply`
+* Modify Azure
+* Modify Terraform code
+* Modify Terraform state
+* Create, update or delete infrastructure
+* Call Azure APIs directly
 
 Recommended starting mode:
 
@@ -512,22 +545,22 @@ Terraform plan output can contain sensitive data depending on provider behaviour
 
 Before using this in production:
 
-- Confirm whether Terraform plan content can be sent to an external AI API.
-- Review data classification requirements.
-- Avoid secrets in Terraform code.
-- Use Azure DevOps secret variables.
-- Consider additional redaction.
-- Keep the report advisory unless governance approves blocking behaviour.
-- Use human approval before `terraform apply`.
+* Confirm whether Terraform plan content can be sent to an external AI API.
+* Review data classification requirements.
+* Avoid secrets in Terraform code.
+* Use Azure DevOps secret variables.
+* Consider additional redaction.
+* Keep the report advisory unless governance approves blocking behaviour.
+* Use human approval before `terraform apply`.
 
 This tool should complement, not replace:
 
-- Terraform validate
-- Checkov, Trivy, TFLint or similar IaC scanners
-- OPA, Sentinel or policy-as-code
-- Pull request review
-- Azure DevOps environment approvals
-- Change management
+* Terraform validate
+* Checkov, Trivy, TFLint or similar IaC scanners
+* OPA, Sentinel or policy-as-code
+* Pull request review
+* Azure DevOps environment approvals
+* Change management
 
 ---
 
