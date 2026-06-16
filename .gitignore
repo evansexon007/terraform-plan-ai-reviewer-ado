@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.log
+
+# Terraform local files
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+plan-review.md
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
