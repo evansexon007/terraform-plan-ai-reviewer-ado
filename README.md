@@ -2,55 +2,87 @@
 
 AI-assisted Terraform plan risk reviewer for **Azure DevOps Terraform pipelines**.
 
-This project reviews Terraform plan output and generates a markdown risk report before `terraform apply`. It is designed to support human approval, not replace it.
+This project reviews the **full Terraform plan output** and generates a human-readable markdown risk report before `terraform apply`.
 
-The reviewer is read-only:
-
-- It reads a Terraform plan text file.
-- It sends the plan content to an OpenAI model for review.
-- It writes a markdown report.
-- It does not run `terraform apply`.
-- It does not modify Azure.
-- It does not modify Terraform state or code.
+It is designed to support a human reviewer or approver. It is **not** intended to replace Terraform validation, IaC scanning, policy-as-code, peer review, or change approval.
 
 ---
 
-## What problem does this solve?
+## What it does
 
-Terraform plans can be long and difficult to review quickly, especially in Azure platform environments where a single plan may include networking, RBAC, Key Vault, storage, diagnostics, AKS, App Gateway, WAF or private endpoint changes.
+The tool reads a Terraform plan text file, reviews the visible resource changes, and produces a markdown report such as:
 
-This tool produces a human-readable review that highlights:
+```text
+plan-review.md
+```
+
+The report includes:
+
+- Overall risk rating
+- Approval recommendation
+- Summary of the planned change
+- Action summary
+- High-risk findings
+- Medium-risk findings
+- Low-risk observations
+- Security and governance notes
+- Recommended next steps
+
+The output can be published in Azure DevOps as:
+
+- A downloadable pipeline artifact
+- A rendered pipeline summary
+
+---
+
+## Important scope clarification
+
+This tool reviews the **entire Terraform plan**, not only a fixed list of Azure resource types.
+
+The risk categories below are areas the reviewer gives **additional attention** to because they are commonly high-impact in Azure platform environments.
+
+It should still assess all visible Terraform changes in the plan, including resource groups, tags, policies, monitoring, compute, networking, storage, identity, databases, Kubernetes, application services, and other Azure resources.
+
+---
+
+## High-impact risk areas
+
+The reviewer gives additional focus to:
 
 - Resource deletion
 - Resource replacement
 - Force replacement
 - Public exposure changes
-- NSG/firewall/route/DNS/private endpoint changes
+- NSG, firewall, route, DNS, private endpoint and private DNS changes
 - RBAC and managed identity changes
 - Key Vault changes
 - Storage account and database risks
-- Backup, retention and data protection concerns
-- Diagnostic/logging/monitoring removal
+- Backup, retention and data protection changes
+- Diagnostic, logging and monitoring removal
 - AKS, App Gateway and WAF changes
-
-The output is intended to be published as an **Azure DevOps pipeline artifact**.
+- SKU, scale, capacity and cost-impacting changes
+- Policy, lock, tag and governance changes
 
 ---
 
-## Intended Azure DevOps flow
+## Safety model
 
-```text
-Azure DevOps pipeline
-  |
-  |-- terraform init
-  |-- terraform validate
-  |-- terraform plan -out=tfplan
-  |-- terraform show -no-color tfplan > plan.txt
-  |-- AI review plan.txt
-  |-- publish plan-review.md as a pipeline artifact
-  |-- human approval
-  |-- terraform apply
-```
+The reviewer is read-only.
+
+It does:
+
+- Read `plan.txt`
+- Send the plan content to the OpenAI model for analysis
+- Write `plan-review.md`
+
+It does **not**:
+
+- Run `terraform apply`
+- Modify Azure
+- Modify Terraform code
+- Modify Terraform state
+- Create, update or delete infrastructure
+- Call Azure APIs directly
 
 Recommended starting mode:
 
@@ -64,7 +96,23 @@ Optional later mode:
 --fail-on-high-risk
 ```
 
-This can fail the pipeline if the review reports High or Critical risk.
+---
+
+## Intended Azure DevOps flow
+
+```text
+Azure DevOps pipeline
+  |
+  |-- terraform init
+  |-- terraform validate
+  |-- terraform plan -out=tfplan
+  |-- terraform show -no-color tfplan > plan.txt
+  |-- AI review plan.txt
+  |-- publish plan-review.md as pipeline summary
+  |-- publish plan-review.md as pipeline artifact
+  |-- human approval
+  |-- terraform apply
+```
 
 ---
 
@@ -77,14 +125,6 @@ terraform-plan-ai-reviewer-ado/
   README.md
   agent.py
   requirements.txt
-```
-
-Optional supporting folders can be added later:
-
-```text
-pipelines/
-docs/
-examples/
 ```
 
 ---
@@ -126,25 +166,21 @@ python .\agent.py --plan-file .\plan.txt --output .\plan-review.md --fail-on-hig
 
 ---
 
-## Azure DevOps configuration
+## Azure DevOps variable group
 
-### 1. Store the OpenAI API key securely
-
-Create an Azure DevOps variable group.
+Create a variable group for the OpenAI API key.
 
 Recommended variable group name:
-
-```text
-ai-secrets
-```
-
-Recommended variable name:
 
 ```text
 openAiApiKey
 ```
 
-Mark the variable as secret.
+Recommended secret variable name:
+
+```text
+openAiApiKey
+```
 
 In Azure DevOps:
 
@@ -155,10 +191,10 @@ Pipelines
   -> New variable group
 ```
 
-Create:
+Create the variable:
 
 ```text
-Variable group name: ai-secrets
+Variable group name: openAiApiKey
 Variable name: openAiApiKey
 Value: your OpenAI API key
 Secret: enabled
@@ -168,7 +204,7 @@ Then authorise the pipeline to use the variable group:
 
 ```text
 Library
-  -> ai-secrets
+  -> openAiApiKey
   -> Pipeline permissions
   -> Authorise the pipeline
 ```
@@ -177,50 +213,31 @@ Do not hard-code the API key in YAML.
 
 ---
 
-## If using this from a pipeline template
+## If using a pipeline template
 
-If your Terraform pipeline uses a reusable template, the variable group should normally be referenced in the **main pipeline YAML that calls the template**, not only inside the template.
+If your Terraform pipeline uses a reusable template, reference the variable group in the YAML that is actually being run.
 
-Example main pipeline:
-
-```yaml
-trigger: none
-
-variables:
-  - group: ai-secrets
-
-stages:
-  - template: templates/terraform-template.yml
-    parameters:
-      serviceConnectionShared: "sc-shared"
-      serviceConnection: "sc-workload"
-      resourceGroup: "rg-tfstate-uks-001"
-      storageAccount: "sttfstateuks001"
-      containerName: "tfstate"
-      backendKey: "platform/terraform.tfstate"
-      workingDirectory: "$(System.DefaultWorkingDirectory)/terraform"
-      environment: "lab"
-```
-
-The important part is:
+Example:
 
 ```yaml
 variables:
-  - group: ai-secrets
+  - group: openAiApiKey
 ```
 
-Then the template can reference the secret variable using:
+The AI review step then maps the secret into the Python process as an environment variable:
 
 ```yaml
 env:
   OPENAI_API_KEY: $(openAiApiKey)
 ```
 
+If Azure DevOps passes the literal value `$(openAiApiKey)` to the script, the variable group is not linked, not authorised, or the variable name does not match.
+
 ---
 
 ## Terraform plan stage example
 
-This is the key pattern inside the Terraform plan stage.
+This is the key pattern inside the `terraform_plan` stage.
 
 It:
 
@@ -230,7 +247,8 @@ It:
 4. Publishes `plan.txt`.
 5. Clones this AI reviewer from GitHub.
 6. Runs the AI review.
-7. Publishes `plan-review.md`.
+7. Uploads the markdown as a pipeline summary.
+8. Publishes `plan-review.md` as an artifact.
 
 ```yaml
 - stage: terraform_plan
@@ -308,6 +326,11 @@ It:
           env:
             OPENAI_API_KEY: $(openAiApiKey)
 
+        - pwsh: |
+            Write-Host "Uploading AI Terraform Plan Review as pipeline summary..."
+            Write-Host "##vso[task.uploadsummary]$(Build.ArtifactStagingDirectory)/plan-review.md"
+          displayName: "Upload AI Plan Review Summary"
+
         - publish: "$(Build.ArtifactStagingDirectory)/plan-review.md"
           artifact: "terraform-plan-ai-review"
           displayName: "Publish AI Plan Review"
@@ -315,40 +338,9 @@ It:
 
 ---
 
-## Full template integration notes
+## Pipeline artifacts and summary
 
-If your existing Terraform template has stages like this:
-
-```text
-terraform_init
-terraform_validate
-terraform_plan
-terraform_apply
-```
-
-Add the AI review only to the `terraform_plan` stage after the plan has been exported to `plan.txt`.
-
-Recommended order:
-
-```text
-Terraform Init
-Terraform Plan
-Export Terraform Plan to Text
-Publish Terraform Plan Text
-Use Python 3.x
-AI Review Terraform Plan
-Publish AI Plan Review
-```
-
-Do not enable `--fail-on-high-risk` at first.
-
-Start with advisory review only. Let the pipeline continue and publish the report.
-
----
-
-## Pipeline artifacts
-
-After a successful run, Azure DevOps should show two artifacts:
+After a successful run, Azure DevOps should show:
 
 ```text
 terraform-plan-text
@@ -358,7 +350,7 @@ terraform-plan-ai-review
   plan-review.md
 ```
 
-The reviewer or approver can open `plan-review.md` before approving apply.
+The review is also uploaded as a pipeline summary, so it can be read directly in the pipeline run without downloading the markdown file.
 
 ---
 
@@ -438,7 +430,7 @@ Review public access, RBAC, Key Vault, diagnostics, monitoring and backup implic
 
 ## Optional blocking mode
 
-Once you trust the output, you can add:
+Once you trust the output, add:
 
 ```powershell
 --fail-on-high-risk
@@ -453,7 +445,7 @@ python ai-reviewer/agent.py `
   --fail-on-high-risk
 ```
 
-Recommended approach:
+Recommended rollout:
 
 ```text
 Phase 1: Advisory only
@@ -465,9 +457,9 @@ Phase 3: Fail on High or Critical
 
 ## Troubleshooting
 
-### Error: Incorrect API key provided: $(openAiApiKey)
+### Incorrect API key provided: $(openAiApiKey)
 
-This means Azure DevOps passed the literal string `$(openAiApiKey)` instead of substituting the secret.
+Azure DevOps passed the literal string `$(openAiApiKey)` instead of substituting the secret.
 
 Fix:
 
@@ -475,7 +467,7 @@ Fix:
 
 ```yaml
 variables:
-  - group: ai-secrets
+  - group: openAiApiKey
 ```
 
 2. Confirm the variable group is authorised for the pipeline.
@@ -492,11 +484,11 @@ env:
   OPENAI_API_KEY: $(openAiApiKey)
 ```
 
-### Error: OPENAI_API_KEY is empty or not mapped
+### OPENAI_API_KEY is empty or not mapped
 
 The variable group is missing, not authorised, or the variable name is wrong.
 
-### Error: plan.txt not found
+### plan.txt not found
 
 Confirm the plan export step ran successfully:
 
@@ -504,35 +496,35 @@ Confirm the plan export step ran successfully:
 terraform show -no-color "$(Build.ArtifactStagingDirectory)/tfplan" | Out-File -FilePath "$(Build.ArtifactStagingDirectory)/plan.txt" -Encoding utf8
 ```
 
-### Error: git clone failed
+### git clone failed
 
-Confirm the GitHub repository is public or configure an Azure DevOps service connection/personal access token for private repo access.
+Confirm this GitHub repository is public or configure authentication for private repo access.
 
-### Error: pip install failed
+### pip install failed
 
-Confirm the agent has internet access to install Python packages.
+Confirm the Azure DevOps agent has internet access to install Python packages.
 
 ---
 
 ## Security considerations
 
-Terraform plan output can contain sensitive data depending on the provider, resource type and configuration.
+Terraform plan output can contain sensitive data depending on provider behaviour and resource configuration.
 
 Before using this in production:
 
-- Confirm whether plan output can be sent to an external AI API.
+- Confirm whether Terraform plan content can be sent to an external AI API.
 - Review data classification requirements.
-- Avoid including secrets in Terraform code.
+- Avoid secrets in Terraform code.
 - Use Azure DevOps secret variables.
-- Consider redaction.
-- Keep the report as advisory unless governance approves blocking behaviour.
+- Consider additional redaction.
+- Keep the report advisory unless governance approves blocking behaviour.
 - Use human approval before `terraform apply`.
 
 This tool should complement, not replace:
 
 - Terraform validate
 - Checkov, Trivy, TFLint or similar IaC scanners
-- OPA/Sentinel/policy-as-code
+- OPA, Sentinel or policy-as-code
 - Pull request review
 - Azure DevOps environment approvals
 - Change management
